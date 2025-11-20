@@ -1,6 +1,6 @@
 import ReactDOM from "react-dom/client";
-import Dashboard from "./Dashboard.tsx";
-import RoomPage from "./RoomPage.tsx";
+import Dashboard from "./Dashboard";
+import RoomPage from "./RoomPage";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import "./index.css";
 

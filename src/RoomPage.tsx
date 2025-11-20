@@ -1,30 +1,71 @@
-import { useParams, Link } from "react-router-dom";
-import { ref, update, onValue } from "firebase/database";
-import { useEffect, useState } from "react";
+// src/RoomPage.tsx
+import { useEffect, useState, JSX} from "react";
+import { useParams, Link, useNavigate } from "react-router-dom";
+import { ref, update, onValue, remove } from "firebase/database";
 import { db } from "./firebase";
 
-export default function RoomPage() {
-  const { roomId } = useParams();
-  const [room, setRoom] = useState(null);
-  const [showFacultyPanel, setShowFacultyPanel] = useState(false);
-  const [facultyInput, setFacultyInput] = useState({
+/** Minimal Room type used by this page; move to src/types.ts if used across files */
+interface Room {
+  id?: string;
+  occupancyCount?: number;
+  currentStatus?: string;
+  nextClass?: string;
+  subject?: string;
+  faculty?: string;
+  nextClassTime?: string;
+}
+
+interface FacultyInput {
+  subject: string;
+  facultyName: string;
+  time: string;
+}
+
+export default function RoomPage(): JSX.Element {
+  const { roomId } = useParams<{ roomId: string }>();
+  const navigate = useNavigate();
+
+  const [room, setRoom] = useState<Room | null>(null);
+  const [showFacultyPanel, setShowFacultyPanel] = useState<boolean>(false);
+  const [facultyInput, setFacultyInput] = useState<FacultyInput>({
     subject: "",
     facultyName: "",
     time: "",
   });
-  const [accessCode, setAccessCode] = useState("");
-  const [isFacultyVerified, setIsFacultyVerified] = useState(false);
+  const [accessCode, setAccessCode] = useState<string>("");
+  const [isFacultyVerified, setIsFacultyVerified] = useState<boolean>(false);
 
-  const FACULTY_ACCESS_CODE = "1111"; // Simple access code
+  const FACULTY_ACCESS_CODE = "1111"; // Simple access code (consider moving to env)
 
   useEffect(() => {
+    if (!roomId) return;
+
     const roomRef = ref(db, `classrooms/${roomId}`);
-    onValue(roomRef, (snapshot) => {
-      setRoom(snapshot.val());
+    const unsubscribe = onValue(roomRef, (snapshot) => {
+      const data = snapshot.val() as Room | null;
+      setRoom(data);
     });
+
+    return () => {
+      // cleanup listener
+      unsubscribe();
+    };
   }, [roomId]);
 
-  if (!room) {
+  if (!roomId) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-center">
+          <p className="text-lg">Room ID missing from URL.</p>
+          <button onClick={() => navigate("/")} className="mt-2 text-purple-600">
+            Back to dashboard
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (room === null) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="text-center">
@@ -35,38 +76,41 @@ export default function RoomPage() {
     );
   }
 
-  const handleEnter = () => {
-    const newCount = (room.occupancyCount || 0) + 1;
-    update(ref(db, `classrooms/${roomId}`), {
+  // safe integer occupancy value
+  const occupancy = (room.occupancyCount ?? 0) as number;
+
+  const handleEnter = async (): Promise<void> => {
+    const newCount = occupancy + 1;
+    await update(ref(db, `classrooms/${roomId}`), {
       currentStatus: newCount > 0 ? "occupied" : "free",
       occupancyCount: newCount,
     });
   };
 
-  const handleExit = () => {
-    const newCount = Math.max((room.occupancyCount || 0) - 1, 0);
-    update(ref(db, `classrooms/${roomId}`), {
+  const handleExit = async (): Promise<void> => {
+    const newCount = Math.max(occupancy - 1, 0);
+    await update(ref(db, `classrooms/${roomId}`), {
       currentStatus: newCount > 0 ? "occupied" : "free",
       occupancyCount: newCount,
     });
   };
 
-  const handleFacultyAccess = () => {
+  const handleFacultyAccess = (): void => {
     if (accessCode === FACULTY_ACCESS_CODE) {
       setIsFacultyVerified(true);
       setShowFacultyPanel(true);
     } else {
-      alert("Invalid access code!");
+      window.alert("Invalid access code!");
     }
   };
 
-  const scheduleClass = () => {
+  const scheduleClass = async (): Promise<void> => {
     if (!facultyInput.subject || !facultyInput.time) {
-      alert("Please fill in Subject and Time");
+      window.alert("Please fill in Subject and Time");
       return;
     }
 
-    update(ref(db, `classrooms/${roomId}`), {
+    await update(ref(db, `classrooms/${roomId}`), {
       nextClass: "faculty_coming",
       subject: facultyInput.subject,
       faculty: facultyInput.facultyName,
@@ -75,26 +119,32 @@ export default function RoomPage() {
 
     setShowFacultyPanel(false);
     setFacultyInput({ subject: "", facultyName: "", time: "" });
-    alert("Class scheduled successfully!");
+    window.alert("Class scheduled successfully!");
   };
 
-  const clearScheduledClass = () => {
-    update(ref(db, `classrooms/${roomId}`), {
+  const clearScheduledClass = async (): Promise<void> => {
+    await update(ref(db, `classrooms/${roomId}`), {
       nextClass: "no_class",
       subject: "-",
       faculty: "-",
       nextClassTime: "-",
     });
-    alert("Scheduled class cleared!");
+    window.alert("Scheduled class cleared!");
   };
 
-  const getStatusColor = () => {
+  const deleteRoom = async (): Promise<void> => {
+    if (!window.confirm(`Delete room ${roomId}?`)) return;
+    await remove(ref(db, `classrooms/${roomId}`));
+    navigate("/");
+  };
+
+  const getStatusColor = (): string => {
     if (room.currentStatus === "occupied") return "bg-red-500";
     if (room.nextClass === "faculty_coming") return "bg-amber-500";
     return "bg-green-500";
   };
 
-  const getStatusText = () => {
+  const getStatusText = (): string => {
     if (room.currentStatus === "occupied") return "Occupied";
     if (room.nextClass === "faculty_coming") return "Upcoming Class";
     return "Free";
@@ -105,20 +155,24 @@ export default function RoomPage() {
       {/* Header */}
       <div className="bg-white shadow-md">
         <div className="max-w-4xl mx-auto px-6 py-6">
-          <Link
-            to="/"
-            className="inline-flex items-center gap-2 text-purple-600 hover:text-purple-700 font-semibold mb-4"
-          >
-            ← Back to Dashboard
-          </Link>
           <div className="flex justify-between items-center">
-            <h1 className="text-4xl font-bold text-purple-600">
-              Room {roomId}
-            </h1>
-            <div
-              className={`px-6 py-3 rounded-2xl text-white font-bold text-lg ${getStatusColor()}`}
-            >
-              {getStatusText()}
+            <div>
+              <Link
+                to="/"
+                className="inline-flex items-center gap-2 text-purple-600 hover:text-purple-700 font-semibold mb-2"
+              >
+                ← Back to Dashboard
+              </Link>
+              <h1 className="text-4xl font-bold text-purple-600">Room {roomId}</h1>
+            </div>
+
+            <div className="flex flex-col items-end gap-2">
+              <div className={`px-6 py-3 rounded-2xl text-white font-bold text-lg ${getStatusColor()}`}>
+                {getStatusText()}
+              </div>
+              <button onClick={deleteRoom} className="text-sm text-red-600 hover:underline">
+                Delete Room
+              </button>
             </div>
           </div>
         </div>
@@ -133,9 +187,7 @@ export default function RoomPage() {
             </div>
 
             <div className="bg-gray-100 rounded-xl p-6 mb-6">
-              <div className="text-4xl font-bold text-purple-600 mb-2">
-                {room.occupancyCount || 0}
-              </div>
+              <div className="text-4xl font-bold text-purple-600 mb-2">{occupancy}</div>
               <div className="text-gray-600 text-lg">Students Inside</div>
             </div>
 
@@ -160,21 +212,19 @@ export default function RoomPage() {
         {/* Upcoming Class Info */}
         {room.nextClass === "faculty_coming" && (
           <div className="bg-amber-50 border-2 border-amber-300 rounded-2xl shadow-md p-6 mb-6">
-            <h3 className="text-xl font-bold text-amber-800 mb-3">
-              📚 Upcoming Class
-            </h3>
+            <h3 className="text-xl font-bold text-amber-800 mb-3">📚 Upcoming Class</h3>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
                 <p className="text-sm text-amber-700 font-semibold">Subject</p>
-                <p className="text-lg text-amber-900">{room.subject}</p>
+                <p className="text-lg text-amber-900">{room.subject ?? "-"}</p>
               </div>
               <div>
                 <p className="text-sm text-amber-700 font-semibold">Faculty</p>
-                <p className="text-lg text-amber-900">{room.faculty}</p>
+                <p className="text-lg text-amber-900">{room.faculty ?? "-"}</p>
               </div>
               <div>
                 <p className="text-sm text-amber-700 font-semibold">Time</p>
-                <p className="text-lg text-amber-900">{room.nextClassTime}</p>
+                <p className="text-lg text-amber-900">{room.nextClassTime ?? "-"}</p>
               </div>
             </div>
           </div>
@@ -184,12 +234,8 @@ export default function RoomPage() {
         <div className="bg-white rounded-2xl shadow-lg p-8">
           {!isFacultyVerified ? (
             <div>
-              <h3 className="text-2xl font-bold text-purple-600 mb-4 flex items-center gap-2">
-                👨‍🏫 Faculty Panel
-              </h3>
-              <p className="text-gray-600 mb-4">
-                Enter access code to schedule upcoming classes
-              </p>
+              <h3 className="text-2xl font-bold text-purple-600 mb-4 flex items-center gap-2">👨‍🏫 Faculty Panel</h3>
+              <p className="text-gray-600 mb-4">Enter access code to schedule upcoming classes</p>
               <div className="flex gap-3">
                 <input
                   type="password"
@@ -198,10 +244,7 @@ export default function RoomPage() {
                   onChange={(e) => setAccessCode(e.target.value)}
                   className="flex-1 px-4 py-3 border-2 border-purple-200 rounded-xl focus:border-purple-500 focus:outline-none"
                 />
-                <button
-                  onClick={handleFacultyAccess}
-                  className="px-8 py-3 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-xl transition-colors"
-                >
+                <button onClick={handleFacultyAccess} className="px-8 py-3 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-xl transition-colors">
                   Verify
                 </button>
               </div>
@@ -209,15 +252,15 @@ export default function RoomPage() {
           ) : (
             <div>
               <div className="flex justify-between items-center mb-6">
-                <h3 className="text-2xl font-bold text-purple-600 flex items-center gap-2">
-                  👨‍🏫 Schedule Next Class
-                </h3>
-                <button
-                  onClick={() => setShowFacultyPanel(!showFacultyPanel)}
-                  className="text-purple-600 hover:text-purple-700 font-semibold"
-                >
-                  {showFacultyPanel ? "Hide" : "Schedule Class"}
-                </button>
+                <h3 className="text-2xl font-bold text-purple-600 flex items-center gap-2">👨‍🏫 Schedule Next Class</h3>
+                <div className="flex items-center gap-3">
+                  <button onClick={() => setShowFacultyPanel(!showFacultyPanel)} className="text-purple-600 hover:text-purple-700 font-semibold">
+                    {showFacultyPanel ? "Hide" : "Schedule Class"}
+                  </button>
+                  <button onClick={() => { setIsFacultyVerified(false); setShowFacultyPanel(false); }} className="text-sm text-gray-500">
+                    Logout
+                  </button>
+                </div>
               </div>
 
               {showFacultyPanel && (
@@ -226,47 +269,29 @@ export default function RoomPage() {
                     type="text"
                     placeholder="Subject Name"
                     value={facultyInput.subject}
-                    onChange={(e) =>
-                      setFacultyInput({
-                        ...facultyInput,
-                        subject: e.target.value,
-                      })
-                    }
+                    onChange={(e) => setFacultyInput({ ...facultyInput, subject: e.target.value })}
                     className="w-full px-4 py-3 border-2 border-purple-200 rounded-xl focus:border-purple-500 focus:outline-none"
                   />
                   <input
                     type="text"
                     placeholder="Faculty Name"
                     value={facultyInput.facultyName}
-                    onChange={(e) =>
-                      setFacultyInput({
-                        ...facultyInput,
-                        facultyName: e.target.value,
-                      })
-                    }
+                    onChange={(e) => setFacultyInput({ ...facultyInput, facultyName: e.target.value })}
                     className="w-full px-4 py-3 border-2 border-purple-200 rounded-xl focus:border-purple-500 focus:outline-none"
                   />
                   <input
                     type="text"
                     placeholder="Time (e.g., 2:00 PM - 3:30 PM)"
                     value={facultyInput.time}
-                    onChange={(e) =>
-                      setFacultyInput({ ...facultyInput, time: e.target.value })
-                    }
+                    onChange={(e) => setFacultyInput({ ...facultyInput, time: e.target.value })}
                     className="w-full px-4 py-3 border-2 border-purple-200 rounded-xl focus:border-purple-500 focus:outline-none"
                   />
                   <div className="flex gap-3">
-                    <button
-                      onClick={scheduleClass}
-                      className="flex-1 px-6 py-3 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-xl transition-colors"
-                    >
+                    <button onClick={scheduleClass} className="flex-1 px-6 py-3 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-xl transition-colors">
                       Schedule Class
                     </button>
                     {room.nextClass === "faculty_coming" && (
-                      <button
-                        onClick={clearScheduledClass}
-                        className="px-6 py-3 bg-red-500 hover:bg-red-600 text-white font-bold rounded-xl transition-colors"
-                      >
+                      <button onClick={clearScheduledClass} className="px-6 py-3 bg-red-500 hover:bg-red-600 text-white font-bold rounded-xl transition-colors">
                         Clear Scheduled Class
                       </button>
                     )}
